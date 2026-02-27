@@ -36,7 +36,8 @@ jobs:
       - name: Checkout Bitcoin Core repo
         uses: actions/checkout@v6
         with:
-          repository: bitcoin/bitcoin
+          repository: maflcko/bitcoin-core
+          ref: 2602-test-del
 
       - name: Install dependencies
         run: |
