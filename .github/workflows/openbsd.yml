@@ -2,7 +2,6 @@ name: OpenBSD
 on:
   pull_request:
     paths:
-      - '.github/actions/build-depends/action.yml'
       - '.github/workflows/openbsd.yml'
   workflow_dispatch:
     inputs:
@@ -12,7 +11,7 @@ on:
         default: bitcoin/bitcoin
         type: string
       ref:
-        description: 'Repository reference: refs/heads/<branch>, refs/tags/<tag>, refs/pull/<PR>/head or refs/<commit>'
+        description: 'Repository reference: refs/heads/<branch>, refs/tags/<tag>, refs/pull/<PR>/head or <commit>'
         required: true
         default: refs/heads/master
         type: string
@@ -53,6 +52,15 @@ jobs:
         release: ['7.8', '7.9']
 
     steps:
+      - &ANNOTATE_WORKFLOW_INPUTS
+        name: Annotate with workflow inputs
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          INPUTS_REPOSITORY: ${{ inputs.repository }}
+          INPUTS_REF: ${{ inputs.ref }}
+        shell: bash
+        run: echo "::notice title=inputs::$INPUTS_REPOSITORY $INPUTS_REF"
+
       - &START_VM
         name: Start OpenBSD ${{ matrix.release }} VM
         uses: vmactions/openbsd-vm@v1
@@ -200,8 +208,9 @@ jobs:
         run: |
           set -e
           ulimit -n 1024
-          # See https://github.com/bitcoin/bitcoin/pull/35954.
-          export QT_NO_GLIB=1
+          # Unbuffered stdout prints "Remaining jobs: ..." in order, which
+          # helps to identify hung tests.
+          export PYTHONUNBUFFERED=1
           /home/build/test/functional/test_runner.py -j $((${{ env.CI_NCPU }} * 2)) --combinedlogslen=99999999 \
             --tmpdirprefix /home \
             --extended \
@@ -225,17 +234,12 @@ jobs:
     strategy: *RELEASE_MATRIX
 
     steps:
+      - *ANNOTATE_WORKFLOW_INPUTS
       - *START_VM
       - *FETCH_SOURCE
 
-      - name: Checkout helper actions
-        uses: actions/checkout@v7
-        with:
-          sparse-checkout: .github/actions/build-depends
-          path: ci/nightly
-
       - name: Build depends
-        uses: ./ci/nightly/.github/actions/build-depends
+        uses: hebasto/bitcoin-core-nightly/.github/actions/build-depends@main
         with:
           vm: openbsd
           source-dir: /home/bitcoin

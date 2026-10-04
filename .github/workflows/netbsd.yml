@@ -2,7 +2,6 @@ name: NetBSD
 on:
   pull_request:
     paths:
-      - '.github/actions/build-depends/action.yml'
       - '.github/workflows/netbsd.yml'
   workflow_dispatch:
     inputs:
@@ -12,7 +11,7 @@ on:
         default: bitcoin/bitcoin
         type: string
       ref:
-        description: 'Repository reference: refs/heads/<branch>, refs/tags/<tag>, refs/pull/<PR>/head or refs/<commit>'
+        description: 'Repository reference: refs/heads/<branch>, refs/tags/<tag>, refs/pull/<PR>/head or <commit>'
         required: true
         default: refs/heads/master
         type: string
@@ -50,7 +49,8 @@ jobs:
         # Test all supported releases.
         # See https://www.netbsd.org/releases/.
         include:
-          - release: '10.1'
+          - release: '10.2'
+            pkgsrc_release: '10.0_2026Q2'
             # The default compiler GCC 10.5.0 does not meet the minimum version requirements.
             sys_packages: 'gcc14'
             # Workaround for the following linker warning when using the systems' `net/zeromq` package:
@@ -59,23 +59,33 @@ jobs:
             pkgsrc_compilers: 'CC="/usr/pkg/gcc14/bin/gcc" CXX="/usr/pkg/gcc14/bin/g++"'
             cmake_vars: '"-DCMAKE_C_COMPILER=/usr/pkg/gcc14/bin/gcc" "-DCMAKE_CXX_COMPILER=/usr/pkg/gcc14/bin/g++"'
             dep_packages: 'gcc14'
-            dep_options: >
+            dep_options: >-
               build_CC=/usr/pkg/gcc14/bin/gcc
               build_CXX=/usr/pkg/gcc14/bin/g++
               CC=/usr/pkg/gcc14/bin/gcc
               CXX=/usr/pkg/gcc14/bin/g++
           - release: '11.0'
+            pkgsrc_release: '11.0_2026Q2'
             sys_packages: 'zeromq'
             pkgsrc_build_zeromq: false
             cmake_vars: '"-DAPPEND_CPPFLAGS=-DKJ_NO_EXCEPTIONS=0"' # Needed for the default GCC 12.5.0.
             dep_packages: 'gcc15'
-            dep_options: >
+            dep_options: >-
               build_CC=/usr/pkg/gcc15/bin/gcc
               build_CXX=/usr/pkg/gcc15/bin/g++
               CC=/usr/pkg/gcc15/bin/gcc
               CXX=/usr/pkg/gcc15/bin/g++
 
     steps:
+      - &ANNOTATE_WORKFLOW_INPUTS
+        name: Annotate with workflow inputs
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          INPUTS_REPOSITORY: ${{ inputs.repository }}
+          INPUTS_REF: ${{ inputs.ref }}
+        shell: bash
+        run: echo "::notice title=inputs::$INPUTS_REPOSITORY $INPUTS_REF"
+
       - &START_VM
         name: Start NetBSD ${{ matrix.release }} VM
         uses: vmactions/netbsd-vm@v1
@@ -88,6 +98,7 @@ jobs:
       - name: Install packages
         run: |
           set -e
+          export PKG_PATH="https://ftp.netbsd.org/pub/pkgsrc/packages/NetBSD/x86_64/${{ matrix.pkgsrc_release }}/All;http://ftp.fr.NetBSD.org/pub/pkgsrc/packages/NetBSD/x86_64/${{ matrix.pkgsrc_release }}/All;https://ftp.jaist.ac.jp/pub/pkgsrc/packages/NetBSD/x86_64/${{ matrix.pkgsrc_release }}/All"
           pkg_info > packages_before
           pkg_add -u ${{ env.PACKAGES }} ${{ env.SYSTEM_PACKAGES }} ${{ matrix.sys_packages }}
           pkg_info > packages_after
@@ -109,7 +120,7 @@ jobs:
             pkgsrc/devel/zlib \
             pkgsrc/lang/gcc14 \
             pkgsrc/lang/gcc14-libs \
-            pkgsrc/lang/gcc15 \
+            pkgsrc/lang/gcc16 \
             pkgsrc/mk \
             pkgsrc/pkgtools \
             pkgsrc/security/openssl \
@@ -261,6 +272,9 @@ jobs:
         if: ${{ ! inputs.skip_functional_tests }}
         run: |
           set -e
+          # Unbuffered stdout prints "Remaining jobs: ..." in order, which
+          # helps to identify hung tests.
+          export PYTHONUNBUFFERED=1
           python3.13 build/test/functional/test_runner.py -j $((${{ env.CI_NCPU }} * 2)) --combinedlogslen=99999999 \
             --tmpdirprefix . \
             --extended \
@@ -284,11 +298,13 @@ jobs:
     strategy: *RELEASE_MATRIX
 
     steps:
+      - *ANNOTATE_WORKFLOW_INPUTS
       - *START_VM
 
       - name: Install packages
         run: |
           set -e
+          export PKG_PATH="https://ftp.netbsd.org/pub/pkgsrc/packages/NetBSD/x86_64/${{ matrix.pkgsrc_release }}/All;http://ftp.fr.NetBSD.org/pub/pkgsrc/packages/NetBSD/x86_64/${{ matrix.pkgsrc_release }}/All;https://ftp.jaist.ac.jp/pub/pkgsrc/packages/NetBSD/x86_64/${{ matrix.pkgsrc_release }}/All"
           pkg_info > packages_before
           pkg_add -u ${{ env.PACKAGES }} ${{ env.DEP_PACKAGES }} ${{ matrix.dep_packages }}
           pkg_info > packages_after
@@ -296,14 +312,8 @@ jobs:
 
       - *FETCH_SOURCE
 
-      - name: Checkout helper actions
-        uses: actions/checkout@v7
-        with:
-          sparse-checkout: .github/actions/build-depends
-          path: ci/nightly
-
       - name: Build depends
-        uses: ./ci/nightly/.github/actions/build-depends
+        uses: hebasto/bitcoin-core-nightly/.github/actions/build-depends@main
         with:
           vm: netbsd
           options: ${{ matrix.dep_options }}

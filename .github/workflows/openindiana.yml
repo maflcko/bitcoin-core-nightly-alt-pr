@@ -11,7 +11,7 @@ on:
         default: bitcoin/bitcoin
         type: string
       ref:
-        description: 'Repository reference: refs/heads/<branch>, refs/tags/<tag>, refs/pull/<PR>/head or refs/<commit>'
+        description: 'Repository reference: refs/heads/<branch>, refs/tags/<tag>, refs/pull/<PR>/head or <commit>'
         required: true
         default: refs/heads/master
         type: string
@@ -32,6 +32,9 @@ concurrency:
 env:
   # See https://docs.github.com/en/actions/reference/runners/github-hosted-runners#standard-github-hosted-runners-for-public-repositories.
   CI_NCPU: 4
+  # Workaround for libstdc++ built with `--enable-clocale=dragonfly`.
+  # See https://www.illumos.org/issues/18481.
+  LC_ALL: 'C'
 
 jobs:
   openindiana:
@@ -42,15 +45,20 @@ jobs:
         shell: openindiana {0}
 
     steps:
+      - name: Annotate with workflow inputs
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          INPUTS_REPOSITORY: ${{ inputs.repository }}
+          INPUTS_REF: ${{ inputs.ref }}
+        shell: bash
+        run: echo "::notice title=inputs::$INPUTS_REPOSITORY $INPUTS_REF"
+
       - name: Start OpenIndiana VM
-        # openindiana-vm@v1.0.9 introduces multiple regressions, including:
-        # 1. A libc thread failure in the `coins_tests_base` test.
-        # 2. Doubled build times.
-        uses: vmactions/openindiana-vm@v1.0.8
+        uses: vmactions/openindiana-vm@v1
         with:
           # This release has `metapackages/build-essential` preinstalled.
-          release: '202510-build'
-          mem: 18432
+          release: '202604-build'
+          envs: 'LC_ALL'
           # The `pkg install` command often encounters networking issues in the CI
           # environment. To mitigate these, the following steps have been taken:
           # 1. Each package is installed individually.
@@ -64,7 +72,6 @@ jobs:
             set -e
             pkg list > packages_before
             pkg install developer/build/pkgconf
-            pkg install system/storage/lsof
             pkg install library/c++/zeromq
             pkg list > packages_after
             diff -w packages_before packages_after | grep '^>' || true
@@ -73,7 +80,7 @@ jobs:
 
       - name: Build Boost
         env:
-          BOOST_VERSION: '1.91.0-1'
+          BOOST_VERSION: '1.92.0'
         run: |
           set -e
           curl --location --fail --output boost.tar.xz https://github.com/boostorg/boost/releases/download/boost-${{ env.BOOST_VERSION }}/boost-${{ env.BOOST_VERSION }}-cmake.tar.xz
@@ -88,17 +95,16 @@ jobs:
             -DCMAKE_DISABLE_FIND_PACKAGE_ICU=ON
           cmake --install build-boost
 
-      # The preinstalled `database/sqlite-3` package is broken.
-      # For details, see https://github.com/bitcoin/bitcoin/issues/34163.
-      - name: Build SQLite
+      - name: Build Cap'n Proto
+        env:
+          CAPNPROTO_VERSION: '1.5.0'
         run: |
           set -e
-          curl --location --fail --output sqlite-autoconf-3460100.tar.gz https://sqlite.org/2024/sqlite-autoconf-3460100.tar.gz
-          tar xf sqlite-autoconf-3460100.tar.gz
-          cd sqlite-autoconf-3460100
-          ./configure
-          make -j ${{ env.CI_NCPU }}
-          make install
+          curl --location --fail --remote-name https://capnproto.org/capnproto-c++-${{ env.CAPNPROTO_VERSION }}.tar.gz
+          tar xf capnproto-c++-${{ env.CAPNPROTO_VERSION }}.tar.gz
+          cd capnproto-c++-${{ env.CAPNPROTO_VERSION }}
+          ./configure --without-fibers
+          make -j ${{ env.CI_NCPU }} install
 
       - name: Fetch source tarball
         run: |
@@ -115,13 +121,16 @@ jobs:
           export CXXFLAGS="-pthread"
           cmake -S bitcoin -B build --preset dev-mode \
             -Wno-error=dev \
-            -DCMAKE_PREFIX_PATH=/usr/local \
             -DBUILD_GUI=OFF \
-            -DBUILD_SHARED_LIBS=OFF \
-            `# TODO: Build Cap'n Proto from source and reenable IPC.` \
-            -DENABLE_IPC=OFF \
             -DWITH_USDT=OFF \
-            -DCMAKE_COMPILE_WARNING_AS_ERROR=ON
+            -DCMAKE_PREFIX_PATH=/usr/local \
+            -DCMAKE_COMPILE_WARNING_AS_ERROR=ON \
+            `# GCC does not support -pie on OpenIndiana.` \
+            `# See https://www.illumos.org/issues/15730.` \
+            `# Therefore, CMake's check_pie_supported fails and` \
+            `# enforcing -fPIC is necessary for BUILD_SHARED_LIBS=ON.` \
+            -DAPPEND_CFLAGS="-fPIC" \
+            -DAPPEND_CXXFLAGS="-fPIC"
 
       - name: Build
         run: |
@@ -157,14 +166,19 @@ jobs:
         shell: bash
         run: df -h
 
+      - name: Check VM disk space
+        if: ${{ ! inputs.skip_functional_tests }}
+        run: df -h "$PWD"
+
       - name: Run functional tests
         if: ${{ ! inputs.skip_functional_tests }}
         run: |
-          # Not running extended tests to avoid disk space issues.
-          python3.14 build/test/functional/test_runner.py -j ${{ env.CI_NCPU }} --combinedlogslen=99999999 \
-            --tmpdirprefix . \
+          # Unbuffered stdout prints "Remaining jobs: ..." in order, which
+          # helps to identify hung tests.
+          export PYTHONUNBUFFERED=1
+          python3.14 build/test/functional/test_runner.py -j $((${{ env.CI_NCPU }} * 2)) --combinedlogslen=99999999 \
+            --tmpdirprefix "$PWD" \
+            --extended \
             `# See https://github.com/bitcoin/bitcoin/issues/33128.` \
             --exclude feature_reindex_init \
-            `# TODO: Investigate the failure.` \
-            --exclude interface_bitcoin_cli \
             --timeout-factor=8

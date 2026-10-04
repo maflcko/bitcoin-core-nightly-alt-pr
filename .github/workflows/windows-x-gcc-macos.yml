@@ -1,8 +1,8 @@
-name: Windows, GCC, UCRT
+name: Windows, X-GCC, macOS
 on:
   pull_request:
     paths:
-      - '.github/workflows/windows-gcc-ucrt.yml'
+      - '.github/workflows/windows-x-gcc-macos.yml'
   workflow_dispatch:
     inputs:
       skip_functional_tests:
@@ -20,13 +20,16 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  CI_HOST: x86_64-w64-mingw32ucrt
+  # Bitcoin Core documents the UCRT triplet `x86_64-w64-mingw32ucrt` (see `depends/README.md`
+  # and `doc/build-windows.md`), but Homebrew's `mingw-w64` package installs its binaries
+  # under the plain `x86_64-w64-mingw32` name. The toolchain is still UCRT-based, as UCRT
+  # has been the Mingw-w64 default since v12.0.0.
+  CI_HOST: x86_64-w64-mingw32
 
 jobs:
   windows-cross:
-    name: 'Windows, cross-build only, UCRT: no GUI'
-    runs-on: ubuntu-latest
-    container: fedora:latest
+    name: 'Windows, cross-build only: no GUI'
+    runs-on: macos-latest
 
     steps:
       - name: Checkout Bitcoin Core repo
@@ -36,11 +39,11 @@ jobs:
 
       - name: Install dependencies
         run: |
-          dnf install -y cmake make patch ucrt64-gcc-c++ which gawk gcc
+          brew install cmake make mingw-w64
 
       - name: Build depends
         run: |
-          gmake -C depends -j $(nproc) HOST=${{ env.CI_HOST }} NO_QT=1 LOG=1
+          gmake -C depends -j $(sysctl -n hw.logicalcpu) HOST=${{ env.CI_HOST }} NO_QT=1 LOG=1
 
       - name: Generate buildsystem
         run: |
@@ -56,7 +59,8 @@ jobs:
             -DCMAKE_COMPILE_WARNING_AS_ERROR=ON
 
       - name: Build
-        run: cmake --build build -j $(nproc)
+        # Limit parallelism to avoid OOM.
+        run: cmake --build build -j 2
 
       - name: Upload built executables
         uses: actions/upload-artifact@v7

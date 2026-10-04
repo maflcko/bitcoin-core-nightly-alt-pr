@@ -1,8 +1,8 @@
-name: Windows, GCC, MSVCRT
+name: Windows, GCC
 on:
   pull_request:
     paths:
-      - '.github/workflows/windows-gcc-msvcrt.yml'
+      - '.github/workflows/windows-gcc.yml'
   workflow_dispatch:
     inputs:
       skip_functional_tests:
@@ -19,10 +19,14 @@ concurrency:
   group: ${{ github.workflow }}${{ github.event_name != 'pull_request' && github.run_id || github.ref }}
   cancel-in-progress: true
 
+env:
+  CI_HOST: x86_64-w64-mingw32ucrt
+
 jobs:
   windows-cross:
-    name: 'Windows, cross-build only, MSVCRT: no GUI'
+    name: 'Windows, cross-build only: no GUI'
     runs-on: ubuntu-latest
+    container: fedora:latest
 
     steps:
       - name: Checkout Bitcoin Core repo
@@ -32,22 +36,24 @@ jobs:
 
       - name: Install dependencies
         run: |
-          sudo apt-get update
-          sudo apt-get install g++-mingw-w64-x86-64-posix
+          dnf install -y cmake make patch ucrt64-gcc-c++ which gawk gcc
 
       - name: Build depends
         run: |
-          gmake -C depends -j $(nproc) HOST=x86_64-w64-mingw32 NO_QT=1 LOG=1
+          gmake -C depends -j $(nproc) HOST=${{ env.CI_HOST }} NO_QT=1 LOG=1
 
       - name: Generate buildsystem
         run: |
           cmake -B build \
-            --toolchain depends/x86_64-w64-mingw32/toolchain.cmake \
+            --toolchain depends/${{ env.CI_HOST }}/toolchain.cmake \
             -DREDUCE_EXPORTS=ON \
             -DBUILD_BENCH=ON \
             -DBUILD_FUZZ_BINARY=ON \
-            -DCMAKE_COMPILE_WARNING_AS_ERROR=ON \
-            -DAPPEND_CXXFLAGS="-Wno-error=maybe-uninitialized"
+            -DAPPEND_CXXFLAGS="-Wno-error=array-bounds \
+              `# This false-positive warning was introduced in https://github.com/bitcoin/bitcoin/pull/35606.` \
+              -Wno-error=maybe-uninitialized \
+            " \
+            -DCMAKE_COMPILE_WARNING_AS_ERROR=ON
 
       - name: Build
         run: cmake --build build -j $(nproc)
@@ -55,7 +61,7 @@ jobs:
       - name: Upload built executables
         uses: actions/upload-artifact@v7
         with:
-          name: x86_64-w64-mingw32-executables-${{ github.run_id }}
+          name: ${{ env.CI_HOST }}-executables-${{ github.run_id }}
           path: |
             build/bin/*.exe
             build/src/**/*.exe
@@ -78,7 +84,7 @@ jobs:
       - name: Download built executables
         uses: actions/download-artifact@v8
         with:
-          name: x86_64-w64-mingw32-executables-${{ github.run_id }}
+          name: ${{ env.CI_HOST }}-executables-${{ github.run_id }}
 
       - name: Check 'bitcoind.exe' executable
         # https://learn.microsoft.com/en-us/cpp/build/building-on-the-command-line?view=msvc-180#developer_command_file_locations

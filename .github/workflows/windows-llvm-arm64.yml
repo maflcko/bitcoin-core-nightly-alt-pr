@@ -20,8 +20,8 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  CI_LLVM_MINGW_URL: https://github.com/mstorsjo/llvm-mingw/releases/download/20260812/llvm-mingw-20260812-ucrt-ubuntu-22.04-x86_64.tar.xz
-  CI_LLVM_MINGW_HASH: 3c67656225ad4000c9f5acabddf0862af59ab201eb5611915ca12915747627f6
+  CI_LLVM_MINGW_URL: https://github.com/mstorsjo/llvm-mingw/releases/download/20260922/llvm-mingw-20260922-ucrt-ubuntu-22.04-x86_64.tar.xz
+  CI_LLVM_MINGW_HASH: bb7bb7654b33d5aa8712acb837c963b2e0c56352560c76105270a3268c665c21
   CI_HOST: aarch64-w64-mingw32
 
 jobs:
@@ -55,7 +55,7 @@ jobs:
             -DBUILD_BENCH=ON \
             -DBUILD_FUZZ_BINARY=ON \
             -DCMAKE_COMPILE_WARNING_AS_ERROR=ON \
-            -DAPPEND_CXXFLAGS="-Wno-return-type -Wno-error=conditional-uninitialized -Wno-error=unused-template"
+            -DAPPEND_CXXFLAGS="-Wno-error=return-type -Wno-error=conditional-uninitialized"
 
       - name: Build
         run: cmake --build build -j $(nproc)
@@ -71,7 +71,7 @@ jobs:
 
   windows-aarch64-native-test:
     name: 'Windows ARM64, test cross-built executables natively'
-    runs-on: windows-11-arm
+    runs-on: windows-11-vs2026-arm
     needs: windows-aarch64-cross
     defaults:
       run:
@@ -92,7 +92,7 @@ jobs:
         # https://learn.microsoft.com/en-us/cpp/build/building-on-the-command-line?view=msvc-180#developer_command_file_locations
         shell: cmd
         run: |
-          call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\Common7\Tools\VsDevCmd.bat" -arch=arm64 -host_arch=arm64 -no_logo
+          call "C:\Program Files\Microsoft Visual Studio\18\Enterprise\Common7\Tools\VsDevCmd.bat" -arch=arm64 -host_arch=arm64 -no_logo
           pwsh.exe -Command "dumpbin.exe /imports bin\bitcoind.exe | Select-String -Pattern '\S+\.dll' -CaseSensitive:$false" || exit 1
           bin\bitcoind.exe -version || exit 1
 
